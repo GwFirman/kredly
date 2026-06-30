@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -93,6 +94,29 @@ func main() {
 				"status":      "ok",
 				"environment": cfg.Environment,
 				"groq_loaded": cfg.GroqAPIKey != "",
+			})
+		})
+
+		api.GET("/groq/stream-tokens", func(c *gin.Context) {
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("Transfer-Encoding", "chunked")
+
+			ch := groq.GlobalBroadcaster.Subscribe()
+			defer groq.GlobalBroadcaster.Unsubscribe(ch)
+
+			c.Stream(func(w io.Writer) bool {
+				select {
+				case <-c.Request.Context().Done():
+					return false
+				case event, ok := <-ch:
+					if !ok {
+						return false
+					}
+					c.SSEvent("token_usage", event)
+					return true
+				}
 			})
 		})
 

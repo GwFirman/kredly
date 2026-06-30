@@ -46,3 +46,4 @@ server/tmp_build
 server/tmp/
 src/routeTree.gen.ts
 server/api.exe
+server/cmd/monitor/monitor.exe

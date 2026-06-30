@@ -91,5 +91,14 @@ func (c *Client) createChatCompletionGeneric(req interface{}) (*ChatCompletionRe
 		return nil, fmt.Errorf("groq api returned error code %d: %s", resp.StatusCode(), resp.String())
 	}
 
+	// Publish token usage event to active CLI subscribers
+	GlobalBroadcaster.Publish(TokenUsageEvent{
+		Model:            completionResponse.Model,
+		PromptTokens:     completionResponse.Usage.PromptTokens,
+		CompletionTokens: completionResponse.Usage.CompletionTokens,
+		TotalTokens:      completionResponse.Usage.TotalTokens,
+	})
+
 	return &completionResponse, nil
 }
+

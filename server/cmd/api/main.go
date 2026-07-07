@@ -91,12 +91,12 @@ func main() {
 	// 8. Define Routes
 	// Detect jika deploy di Vercel, gunakan base path "/", jika tidak gunakan "/api"
 	basePath := "/api"
-	// if os.Getenv("VERCEL") == "1" || os.Getenv("VERCEL_ENV") != "" {
-	// 	basePath = "/"
-	// 	log.Println("Running on Vercel, using base path: /")
-	// } else {
-	// 	log.Printf("Running locally, using base path: %s", basePath)
-	// }
+	if os.Getenv("VERCEL") == "1" || os.Getenv("VERCEL_ENV") != "" {
+		basePath = "/"
+		log.Println("Running on Vercel, using base path: /")
+	} else {
+		log.Printf("Running locally, using base path: %s", basePath)
+	}
 
 	api := r.Group(basePath)
 	{
@@ -112,7 +112,7 @@ func main() {
 		api.POST("/profile/custom-assessment", middleware.AuthMiddleware(cfg, authService), cvHandler.HandleCreateCustomAssessment)
 
 		// Blockchain verification and issuance
-		api.POST("/blockchain/verify-by-hash", blockchainHandler.HandleVerifyByHashOnly) // Verify with hash only (search DB first)
+		api.POST("/blockchain/verify-by-hash", blockchainHandler.HandleVerifyByHashOnly)                // Verify with hash only (search DB first)
 		api.POST("/blockchain/verify-by-certificate-id", blockchainHandler.HandleVerifyByCertificateId) // Verify with certificate ID only
 		api.GET("/blockchain/verify", blockchainHandler.HandleCheckCertificate)
 		api.POST("/blockchain/issue", middleware.AuthMiddleware(cfg, authService), blockchainHandler.HandleIssueCertificate)

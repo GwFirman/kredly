@@ -14,7 +14,7 @@ export default function NotificationsTab() {
       <div>
         <h2 className="text-2xl font-bold">Notifikasi</h2>
         <p className="text-sm text-muted-foreground">
-          Atur preferensi notifikasi Anda
+          Atur preferensi notifikasi Kamu
         </p>
       </div>
 

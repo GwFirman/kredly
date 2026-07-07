@@ -1,22 +1,13 @@
 {
-  "services": {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "experimentalServices": {
     "api": {
-      "root": "server/",
-      "entrypoint": "cmd/api/main.go"
+      "entrypoint": "server/cmd/api/main.go",
+      "routePrefix": "/api"
     },
     "web": {
-      "root": ".",
+      "routePrefix": "/",
       "framework": "vite"
     }
-  },
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": { "service": "api" }
-    },
-    {
-          "source": "/((?!api/|static/|assets/|favicon.ico).*)",
-          "destination": "/index.html"
-        }
-  ]
+  }
 }

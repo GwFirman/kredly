@@ -9,23 +9,40 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
-import { Search, Award } from 'lucide-react';
+import { Search, Award, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import certPlaceholder from '@/assets/certification/certplaceholder.png';
+import { sessionService } from '@/services/sessionService';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
-interface Credential {
+interface CredentialAttempt {
   id: string;
-  skillName: string;
   score: number;
   dateEarned: string;
   blockchainTxHash: string;
-  status: 'verified';
-  sessionId?: string;
-  level?: string;
+  sessionId: string;
+  level: string;
+  createdAt: string;
+}
+
+interface GroupedCredential {
+  skillName: string;
+  bestScore: number;
+  bestLevel: string;
+  attempts: CredentialAttempt[];
 }
 
 interface CertificationListProps {
-  filteredCredentials: Credential[];
+  groupedCredentials: GroupedCredential[];
   viewMode: 'grid' | 'list';
   searchQuery: string;
   filterStatus: 'all' | 'verified';
@@ -34,7 +51,7 @@ interface CertificationListProps {
 }
 
 export default function CertificationList({
-  filteredCredentials,
+  groupedCredentials,
   viewMode,
   searchQuery,
   filterStatus,
@@ -43,6 +60,21 @@ export default function CertificationList({
 }: CertificationListProps) {
   const navigate = useNavigate();
   const [downloadingId, setDownloadingId] = React.useState<string | null>(null);
+  const [expandedSkills, setExpandedSkills] = React.useState<{
+    [key: string]: boolean;
+  }>({});
+  const [retakeSkill, setRetakeSkill] =
+    React.useState<GroupedCredential | null>(null);
+  const [isRetaking, setIsRetaking] = React.useState(false);
+
+  const toggleExpand = (e: React.MouseEvent, skillName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpandedSkills((prev) => ({
+      ...prev,
+      [skillName]: !prev[skillName],
+    }));
+  };
 
   const handleDownload = async (e: React.MouseEvent, sessionId?: string) => {
     e.preventDefault();
@@ -81,118 +113,298 @@ export default function CertificationList({
     });
   };
 
-  if (filteredCredentials.length > 0) {
+  const handleConfirmRetake = async () => {
+    if (!retakeSkill) return;
+    setIsRetaking(true);
+
+    try {
+      // 1. Fetch user profile config to get specific assessment configuration
+      const profileRes = await fetch('/api/profile', {
+        credentials: 'include',
+      });
+      if (!profileRes.ok) throw new Error('Gagal mengambil konfigurasi profil');
+      const profileData = await profileRes.json();
+      const cvAssessments = profileData?.profile?.cvAssessments || [];
+
+      // Find the matching assessment configuration
+      const assessment = cvAssessments.find(
+        (a: any) => a.title === retakeSkill.skillName,
+      );
+      if (!assessment) {
+        throw new Error('Konfigurasi asesmen untuk skill ini tidak ditemukan.');
+      }
+
+      // 2. Call session creation service directly
+      const sessionResponse = await sessionService.createSession({
+        role: assessment.title,
+        level: profileData?.profile?.cvLevel || 'Junior',
+        skills:
+          assessment.type === 'general'
+            ? assessment.topics || []
+            : [assessment.title],
+        cv_summary:
+          profileData?.profile?.cvSummary || `${assessment.title} assessment`,
+        assessment_id: assessment.id,
+      });
+
+      // 3. Immediately redirect to the active exam session
+      navigate({
+        to: '/quiz/$sessionId',
+        params: { sessionId: sessionResponse.session_id },
+      });
+    } catch (err: any) {
+      console.error('Failed to start retake:', err);
+      alert(err.message || 'Gagal memulai sesi asesmen baru.');
+    } finally {
+      setIsRetaking(false);
+      setRetakeSkill(null);
+    }
+  };
+
+  if (groupedCredentials.length > 0) {
     return (
-      <div
-        className={
-          viewMode === 'grid'
-            ? 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'
-            : 'space-y-4'
-        }
-      >
-        {filteredCredentials.map((credential) => (
-          <Link
-            key={credential.id}
-            to="/app/certification/$id"
-            params={{ id: credential.sessionId || credential.id }}
-            className={`cursor-pointer overflow-hidden rounded-xl border border-gray-200 bg-white transition-all hover:shadow-sm ${
-              viewMode === 'list' ? 'flex flex-row' : ''
-            }`}
-          >
-            {/* Header Image with Verified Badge */}
-            <div
-              className={`relative flex items-center justify-center overflow-hidden bg-gray-100 ${
-                viewMode === 'list'
-                  ? 'w-48 shrink-0 aspect-4/3'
-                  : 'w-full aspect-4/3'
-              }`}
-            >
-              <img
-                src={certPlaceholder}
-                alt={credential.skillName}
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent" />
+      <>
+        <div
+          className={
+            viewMode === 'grid'
+              ? 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'
+              : 'space-y-4'
+          }
+        >
+          {groupedCredentials.map((item) => {
+            // Find the best attempt's details (for download/view details on the card header)
+            const bestAttempt =
+              item.attempts.find((a) => a.score === item.bestScore) ||
+              item.attempts[0];
+            const bestSessionId = bestAttempt.sessionId;
+            const latestAttempt = item.attempts[0];
+            const isExpanded = !!expandedSkills[item.skillName];
 
-              {/* Verified Badge - Absolute Top Right */}
-              <div className="absolute top-3 right-3 z-20">
-                <Badge variant="default">Verified</Badge>
-              </div>
-            </div>
+            return (
+              <div
+                key={item.skillName}
+                className={`overflow-hidden rounded-xl border border-gray-200 bg-white transition-all hover:shadow-sm ${viewMode === 'list' ? 'flex flex-row' : ''
+                  }`}
+              >
+                {/* Header Image with Verified Badge */}
+                <div
+                  className={`relative flex items-center justify-center overflow-hidden bg-gray-100 ${viewMode === 'list'
+                    ? 'w-48 shrink-0 aspect-4/3'
+                    : 'w-full aspect-4/3'
+                    }`}
+                >
+                  <img
+                    src={certPlaceholder}
+                    alt={item.skillName}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent" />
 
-            <div className={viewMode === 'list' ? 'flex-1' : ''}>
-              {/* Gray Title Section */}
-              <div className="bg-gray-50 px-4 py-3 border-b border-gray-100">
-                <h3 className="text-base font-bold text-gray-900 leading-tight">
-                  {credential.skillName}
-                </h3>
-                <p className="text-xs text-gray-500 mt-1">
-                  {credential.dateEarned}
-                </p>
-              </div>
-
-              {/* Content Section */}
-              <div className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-600">
-                    Score
-                  </span>
-                  <span className="text-2xl font-bold text-gray-900">
-                    {credential.score}
-                    <span className="text-sm text-gray-500 font-normal">
-                      {credential.score > 100 ? '/1000' : '/100'}
-                    </span>
-                  </span>
+                  {/* Verified Badge - Absolute Top Right */}
+                  <div className="absolute top-3 right-3 z-20">
+                    <Badge variant="default">Verified</Badge>
+                  </div>
                 </div>
-                {/* <div>
-                  <span className="mb-1 block text-xs font-medium text-gray-500">
-                    Blockchain TX Hash
-                  </span>
-                  <code className="block truncate rounded bg-gray-100 px-2 py-1 text-xs">
-                    {credential.blockchainTxHash}
-                  </code>
-                </div> */}
-                <div className="flex gap-2 pt-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={(e) => handleDownload(e, credential.sessionId)}
-                    disabled={downloadingId === credential.sessionId}
-                  >
-                    {downloadingId === credential.sessionId
-                      ? 'Memuat...'
-                      : 'Download'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={(e) => handleDetailClick(e, credential.sessionId)}
-                  >
-                    Lihat Detail
-                  </Button>
-                  <Button size="sm" variant="ghost">
-                    <svg
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+
+                <div
+                  className={`flex-1 flex flex-col justify-between ${viewMode === 'list' ? '' : ''}`}
+                >
+                  <div>
+                    {/* Gray Title Section */}
+                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                      <div>
+                        <h3 className="text-base font-bold text-gray-900 leading-tight">
+                          {item.skillName}
+                        </h3>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Terakhir: {latestAttempt.dateEarned}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="text-xs">
+                        {item.bestLevel}
+                      </Badge>
+                    </div>
+
+                    {/* Content Section */}
+                    <div className="p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-gray-600">
+                          Skor Terbaik
+                        </span>
+                        <span className="text-2xl font-bold text-gray-900">
+                          {item.bestScore}
+                          <span className="text-sm text-gray-500 font-normal">
+                            {item.bestScore > 100 ? '/1000' : '/100'}
+                          </span>
+                        </span>
+                      </div>
+
+                      {/* Accordion / History Trigger */}
+                      <div className="pt-1">
+                        <button
+                          onClick={(e) => toggleExpand(e, item.skillName)}
+                          className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition-colors"
+                        >
+                          {isExpanded ? (
+                            <>
+                              <ChevronUp className="h-4 w-4" />
+                              Sembunyikan Riwayat Percobaan (
+                              {item.attempts.length})
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="h-4 w-4" />
+                              Lihat Riwayat Percobaan
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Accordion Content */}
+                      {isExpanded && (
+                        <div className="mt-2 pt-2 border-t border-gray-100 space-y-2 max-h-48 overflow-y-auto pr-1">
+                          {item.attempts.map((attempt, index) => (
+                            <div
+                              key={attempt.id}
+                              className="flex items-center justify-between text-xs p-2 bg-gray-50 rounded-lg border border-gray-100 hover:bg-gray-100/50 transition-colors"
+                            >
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-gray-700">
+                                  Percobaan #{item.attempts.length - index}
+                                </span>
+                                <span className="text-[10px] text-gray-500">
+                                  {attempt.dateEarned}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="font-bold text-gray-800">
+                                  {attempt.score}
+                                </span>
+                                <div className="flex gap-1">
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={(e) =>
+                                      handleDownload(e, attempt.sessionId)
+                                    }
+                                    disabled={
+                                      downloadingId === attempt.sessionId
+                                    }
+                                    className="h-7 px-2 text-[10px]"
+                                  >
+                                    {downloadingId === attempt.sessionId
+                                      ? '...'
+                                      : 'Unduh'}
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={(e) =>
+                                      handleDetailClick(e, attempt.sessionId)
+                                    }
+                                    className="h-7 px-2 text-[10px]"
+                                  >
+                                    Detail
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions Section */}
+                  <div className="px-4 pb-4 pt-1 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-xs"
+                      onClick={(e) => handleDownload(e, bestSessionId)}
+                      disabled={downloadingId === bestSessionId}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                      />
-                    </svg>
-                  </Button>
+                      {downloadingId === bestSessionId
+                        ? 'Memuat...'
+                        : 'Unduh Terbaik'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-xs"
+                      onClick={(e) => handleDetailClick(e, bestSessionId)}
+                    >
+                      Detail Terbaik
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="flex-1 text-xs bg-primary hover:bg-primary/70 text-white font-medium"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setRetakeSkill(item);
+                      }}
+                      disabled={isRetaking}
+                    >
+                      Uji Ulang
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </Link>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+
+        {/* Retake Confirmation Dialog */}
+        <AlertDialog
+          open={!!retakeSkill}
+          onOpenChange={(open) => !open && setRetakeSkill(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Mulai Uji Ulang Asesmen?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2 text-sm text-gray-600">
+                <p>
+                  Anda akan memulai sesi asesmen baru untuk{' '}
+                  <strong className="text-gray-900">
+                    {retakeSkill?.skillName}
+                  </strong>
+                  .
+                </p>
+                <ul className="list-disc pl-5 space-y-1 mt-2 text-xs">
+                  <li>
+                    Tindakan ini akan mengonsumsi{' '}
+                    <strong>1 Kredit Token</strong> Anda.
+                  </li>
+                  <li>
+                    Skor terbaik Anda sebelumnya akan tetap dipertahankan dan
+                    ditampilkan sebagai sertifikat utama.
+                  </li>
+                  <li>
+                    Setelah selesai, sertifikat baru akan diterbitkan dan
+                    tercatat dalam riwayat percobaan.
+                  </li>
+                </ul>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isRetaking}>Batal</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleConfirmRetake();
+                }}
+                disabled={isRetaking}
+                className="bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5"
+              >
+                {isRetaking && <Loader2 className="h-4 w-4 animate-spin" />}
+                {isRetaking ? 'Memulai...' : 'Ya, Mulai Sekarang'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     );
   }
 

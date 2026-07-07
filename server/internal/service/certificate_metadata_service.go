@@ -59,6 +59,21 @@ func (s *CertificateMetadataService) GetByPdfHash(pdfHash string) (*models.Certi
 	return &metadata, nil
 }
 
+// GetByUserID retrieves all certificate metadatas by user ID
+func (s *CertificateMetadataService) GetByUserID(userID string) ([]models.CertificateMetadata, error) {
+	cursor, err := s.collection.Find(context.Background(), bson.M{"user_id": userID})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+
+	var results []models.CertificateMetadata
+	if err := cursor.All(context.Background(), &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // Save creates or updates certificate metadata
 func (s *CertificateMetadataService) Save(metadata *models.CertificateMetadata) error {
 	now := time.Now()

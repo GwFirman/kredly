@@ -30,28 +30,25 @@ function formatDate(dateString: string): string {
 }
 
 export function IndeedJobCard({ job }: IndeedJobCardProps) {
+  // Don't render if essential fields are missing
+  if (!job.title || !job.company) {
+    return null;
+  }
+
   return (
     <article className="border-b border-border transition-colors hover:bg-muted/30">
       <div className="flex gap-4 px-6 py-5">
         {/* Logo */}
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center border bg-muted">
-          {job.logo ? (
-            <img
-              src={job.logo}
-              alt={job.company}
-              className="h-full w-full object-contain p-2"
-              onError={(e) => {
-                e.currentTarget.src = IndeedIcon;
-                e.currentTarget.alt = 'Indeed';
-              }}
-            />
-          ) : (
-            <img
-              src={IndeedIcon}
-              alt="Indeed"
-              className="h-full w-full object-contain p-2"
-            />
-          )}
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center">
+          <img
+            src={job.logo || IndeedIcon}
+            alt={job.logo ? job.company : 'Indeed'}
+            className="h-full w-full object-contain"
+            onError={(e) => {
+              e.currentTarget.src = IndeedIcon;
+              e.currentTarget.alt = 'Indeed';
+            }}
+          />
         </div>
 
         {/* Content */}

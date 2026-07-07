@@ -30,6 +30,11 @@ function formatDate(dateString: string): string {
 }
 
 export function UpworkJobCard({ job }: UpworkJobCardProps) {
+  // Don't render if essential fields are missing
+  if (!job.title || !job.company) {
+    return null;
+  }
+
   return (
     <article className="border-b border-border transition-colors hover:bg-muted/30">
       <div className="flex gap-4 px-6 py-5">

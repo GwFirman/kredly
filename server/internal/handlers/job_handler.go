@@ -96,6 +96,20 @@ func (h *JobHandler) FetchAndStoreJobs(c *gin.Context) {
 		searchQuery = "Software Developer" // fallback default
 	}
 
+	// Build CV data for better job matching
+	var cvData *service.CVData
+	if err == nil {
+		cvData = &service.CVData{
+			Role:       userProfile.CVRole,
+			Level:      userProfile.CVLevel,
+			Skills:     userProfile.CVSkills,
+			Experience: userProfile.Experience,
+			IsStudent:  userProfile.IsStudent,
+			Degree:     userProfile.Degree,
+			Summary:    userProfile.CVSummary,
+		}
+	}
+
 	// Delete existing jobs for this user first to save storage
 	_, err = h.db.Collection("job").DeleteMany(
 		context.Background(),
@@ -106,7 +120,7 @@ func (h *JobHandler) FetchAndStoreJobs(c *gin.Context) {
 		return
 	}
 
-	jobs, err := h.apify.SearchAllJobs(searchQuery, req.Location)
+	jobs, err := h.apify.SearchAllJobs(searchQuery, req.Location, cvData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

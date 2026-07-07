@@ -210,7 +210,7 @@ func (h *ChatHandler) streamChatCompletion(w gin.ResponseWriter, messages []groq
 		if resp.StatusCode == http.StatusTooManyRequests { // 429
 			retryAfter := resp.Header.Get("Retry-After")
 			resp.Body.Close()
-			
+
 			// Sleep if we have cycled through a couple of times
 			var sleepDuration time.Duration
 			if attempt >= 2 {

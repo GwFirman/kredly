@@ -29,7 +29,7 @@ func LoadConfig() *Config {
 
 	port := getEnv("PORT", "8080")
 	env := getEnv("ENVIRONMENT", "development")
-	
+
 	// Read keys with fallback support
 	rawKeys := getEnv("GROQ_API_KEYS", "")
 	if rawKeys == "" {

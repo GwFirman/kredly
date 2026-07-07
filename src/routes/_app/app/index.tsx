@@ -52,7 +52,7 @@ function RouteComponent() {
     averageScore: 0,
     activeAssessments: 0,
   });
-  const [recentCredentials] = useState<Credential[]>([]);
+  const [recentCredentials, setRecentCredentials] = useState<Credential[]>([]);
   const [availableAssessments, setAvailableAssessments] = useState<
     CVAssessment[]
   >([]);
@@ -62,10 +62,46 @@ function RouteComponent() {
       try {
         setIsLoading(true);
 
-        // Fetch user profile which contains assessments
-        const profileResponse = await fetch('/api/profile', {
-          credentials: 'include',
-        });
+        // Fetch both profile and certificates
+        const [profileResponse, certResponse] = await Promise.all([
+          fetch('/api/profile', { credentials: 'include' }),
+          fetch('/api/certificates/user', { credentials: 'include' }),
+        ]);
+
+        let certificates: Credential[] = [];
+        if (certResponse.ok) {
+          const certData = await certResponse.json();
+          if (certData.certificates) {
+            certificates = certData.certificates.map((cert: any) => ({
+              id: cert.id,
+              role: cert.assessmentName,
+              level: 'Intermediate',
+              skills: [],
+              thetaCurrent: ((cert.score || 0) / 16.67) - 3,
+              totalItems: 0,
+              maxItems: 0,
+              minItems: 0,
+              completed: true,
+              createdAt: cert.createdAt || new Date().toISOString(),
+            }));
+          }
+        }
+
+        // Calculate statistics from certificates
+        const totalCredentials = certificates.length;
+        const averageScore = totalCredentials > 0
+          ? Math.round(certificates.reduce((acc, cert) => {
+              const score = Math.round((cert.thetaCurrent + 3) * 16.67);
+              return acc + score;
+            }, 0) / totalCredentials)
+          : 0;
+
+        // Get 3 most recent credentials
+        const recent = [...certificates]
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 3);
+
+        setRecentCredentials(recent);
 
         if (profileResponse.ok) {
           const data = await profileResponse.json();
@@ -100,16 +136,16 @@ function RouteComponent() {
 
             setAvailableAssessments(selected);
 
-            // Update stats with total available assessments
+            // Update stats with all data
             setStats({
-              totalCredentials: 0,
-              averageScore: 0,
+              totalCredentials,
+              averageScore,
               activeAssessments: availableOnly.length,
             });
           } else {
             setStats({
-              totalCredentials: 0,
-              averageScore: 0,
+              totalCredentials,
+              averageScore,
               activeAssessments: 0,
             });
           }
@@ -166,7 +202,7 @@ function RouteComponent() {
                       description: 'Terverifikasi blockchain',
                     },
                     {
-                      value: `${stats.averageScore}%`,
+                      value: stats.averageScore.toString(),
                       label: 'Rata-rata skor',
                       description: 'Dari seluruh asesmen',
                     },

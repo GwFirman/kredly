@@ -464,13 +464,13 @@ Return ONLY valid JSON object without markdown tags.`
 
 	// Return response with assessments
 	response := gin.H{
-		"message":    "CV berhasil diupload dan diparse",
-		"cvFileName": file.Filename,
-		"cvFilePath": filePath,
-		"role":       parsedRole,
-		"level":      parsedLevel,
-		"skills":     parsedSkills,
-		"summary":    parsedSummary,
+		"message":     "CV berhasil diupload dan diparse",
+		"cvFileName":  file.Filename,
+		"cvFilePath":  filePath,
+		"role":        parsedRole,
+		"level":       parsedLevel,
+		"skills":      parsedSkills,
+		"summary":     parsedSummary,
 		"assessments": parsedAssessments,
 	}
 
@@ -602,8 +602,8 @@ func (h *ProfileHandler) HandleGetPublicProfileSettings(c *gin.Context) {
 				Portfolio: "",
 				Twitter:   "",
 			},
-			CreatedAt:        time.Now(),
-			UpdatedAt:        time.Now(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"settings": defaultSettings,
@@ -751,7 +751,7 @@ func (h *ProfileHandler) HandleGetPublicProfileByUsername(c *gin.Context) {
 		} else {
 			filter = bson.M{"user_id": user.ID}
 		}
-		
+
 		certCursor, err := certColl.Find(ctx, filter)
 		if err == nil {
 			defer certCursor.Close(ctx)

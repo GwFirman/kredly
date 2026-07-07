@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"kredly/internal/blockchain"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
 
 type BlockchainHandler struct {
 	client          *blockchain.CertificateClient
@@ -91,12 +93,49 @@ func (h *BlockchainHandler) HandleGetCertificateMetadata(c *gin.Context) {
 	})
 }
 
+// HandleGetUserCertificates retrieves all certificates for the authenticated user
+func (h *BlockchainHandler) HandleGetUserCertificates(c *gin.Context) {
+	if h.metadataService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Metadata service not available"})
+		return
+	}
+
+	var userID string
+	if userInterface, exists := c.Get("user"); exists {
+		if userMap, ok := userInterface.(gin.H); ok {
+			if id, ok := userMap["id"].(string); ok {
+				userID = id
+			}
+		}
+	}
+
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	certificates, err := h.metadataService.GetByUserID(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"certificates": certificates,
+	})
+}
+
 // Request/Response structs for verification
 type VerifyResponse struct {
 	IsValid  bool                        `json:"isValid"`
 	Status   string                      `json:"status"`
 	Message  string                      `json:"message"`
 	Metadata *models.CertificateMetadata `json:"metadata,omitempty"`
+}
+
+// VerifyByCertificateIdRequest for verifying with certificate ID only
+type VerifyByCertificateIdRequest struct {
+	CertificateId string `json:"certificateId" binding:"required"`
 }
 
 // VerifyByHashOnlyRequest for verifying with only hash (no certificate ID needed)
@@ -148,6 +187,69 @@ func (h *BlockchainHandler) HandleVerifyByHashOnly(c *gin.Context) {
 
 	// Found certificate in database, now verify with blockchain
 	result, err := h.client.VerifyCertificate(metadata.CertificateID, req.PdfHash)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var message string
+	switch result.Status {
+	case blockchain.VerifyStatusValid:
+		message = "Certificate is valid and authentic"
+	case blockchain.VerifyStatusNotFound:
+		message = "Certificate not found on blockchain"
+	case blockchain.VerifyStatusRevoked:
+		message = "Certificate has been revoked"
+	case blockchain.VerifyStatusHashMismatch:
+		message = "Certificate hash mismatch - document may be tampered"
+	default:
+		message = "Unknown status"
+	}
+
+	c.JSON(http.StatusOK, VerifyResponse{
+		IsValid:  result.IsValid,
+		Status:   result.Status.String(),
+		Message:  message,
+		Metadata: metadata,
+	})
+}
+
+// HandleVerifyByCertificateId verifies certificate by searching database with certificate ID
+func (h *BlockchainHandler) HandleVerifyByCertificateId(c *gin.Context) {
+	if h.client == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Blockchain service not available"})
+		return
+	}
+
+	if h.metadataService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Metadata service not available"})
+		return
+	}
+
+	var req VerifyByCertificateIdRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Search database by certificate ID
+	metadata, err := h.metadataService.GetByCertificateID(req.CertificateId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if metadata == nil {
+		c.JSON(http.StatusOK, VerifyResponse{
+			IsValid: false,
+			Status:  "NotFound",
+			Message: "Certificate not found in database",
+		})
+		return
+	}
+
+	// Found certificate in database, now verify with blockchain
+	result, err := h.client.VerifyCertificate(metadata.CertificateID, metadata.PdfHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -259,6 +361,11 @@ func (h *BlockchainHandler) HandleIssueCertificate(c *gin.Context) {
 	}
 
 	// Upload PDF to Pinata IPFS
+	jwt := os.Getenv("PINATA_JWT")
+	fmt.Printf("[DEBUG] HandleIssueCertificate - Loaded PINATA_JWT length: %d\n", len(jwt))
+	if len(jwt) > 30 {
+		fmt.Printf("[DEBUG] HandleIssueCertificate - Loaded PINATA_JWT prefix: %s\n", jwt[:30])
+	}
 	pinataClient := blockchain.NewPinataClient()
 	if pinataClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Pinata service not available - check PINATA_JWT"})

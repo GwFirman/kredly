@@ -89,20 +89,21 @@ type Verification struct {
 
 // UserProfile menyimpan data onboarding user (CV, pengalaman, status student)
 type UserProfile struct {
-	ID            string                `bson:"_id" json:"id"`
-	UserID        string                `bson:"userId" json:"userId"`                     // Relasi ke User._id
-	CVFileName    string                `bson:"cvFileName" json:"cvFileName"`             // Nama file CV
-	CVFilePath    string                `bson:"cvFilePath" json:"cvFilePath"`             // Path/URL file CV di server
-	Experience    string                `bson:"experience" json:"experience"`             // "below-1", "1-2", "3-5", "not-working"
-	IsStudent     bool                  `bson:"isStudent" json:"isStudent"`               // true/false
-	Degree        *string               `bson:"degree,omitempty" json:"degree,omitempty"` // Jurusan (opsional, jika student)
-	CVRole        *string               `bson:"cvRole,omitempty" json:"cvRole,omitempty"`
-	CVLevel       *string               `bson:"cvLevel,omitempty" json:"cvLevel,omitempty"`
-	CVSkills      []string              `bson:"cvSkills,omitempty" json:"cvSkills,omitempty"`
-	CVSummary     *string               `bson:"cvSummary,omitempty" json:"cvSummary,omitempty"`
-	CVAssessments []GeneratedAssessment `bson:"cvAssessments,omitempty" json:"cvAssessments,omitempty"`
-	CreatedAt     time.Time             `bson:"createdAt" json:"createdAt"`
-	UpdatedAt     time.Time             `bson:"updatedAt" json:"updatedAt"`
+	ID                      string                `bson:"_id" json:"id"`
+	UserID                  string                `bson:"userId" json:"userId"`                     // Relasi ke User._id
+	CVFileName              string                `bson:"cvFileName" json:"cvFileName"`             // Nama file CV
+	CVFilePath              string                `bson:"cvFilePath" json:"cvFilePath"`             // Path/URL file CV di server
+	Experience              string                `bson:"experience" json:"experience"`             // "below-1", "1-2", "3-5", "not-working"
+	IsStudent               bool                  `bson:"isStudent" json:"isStudent"`               // true/false
+	Degree                  *string               `bson:"degree,omitempty" json:"degree,omitempty"` // Jurusan (opsional, jika student)
+	CVRole                  *string               `bson:"cvRole,omitempty" json:"cvRole,omitempty"`
+	CVLevel                 *string               `bson:"cvLevel,omitempty" json:"cvLevel,omitempty"`
+	CVSkills                []string              `bson:"cvSkills,omitempty" json:"cvSkills,omitempty"`
+	CVSummary               *string               `bson:"cvSummary,omitempty" json:"cvSummary,omitempty"`
+	CVAssessments           []GeneratedAssessment `bson:"cvAssessments,omitempty" json:"cvAssessments,omitempty"`
+	RoleAssessmentCompleted bool                  `bson:"roleAssessmentCompleted" json:"roleAssessmentCompleted"`
+	CreatedAt               time.Time             `bson:"createdAt" json:"createdAt"`
+	UpdatedAt               time.Time             `bson:"updatedAt" json:"updatedAt"`
 
 	User *User `bson:"-" json:"user,omitempty"` // Relasi untuk JSON response
 }

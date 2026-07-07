@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -512,6 +513,21 @@ func (s *CATService) GetResult(ctx context.Context, sessionID string) (*SessionR
 	}
 
 	score := ThetaToScore(sess.ThetaCurrent)
+
+	// Tolerance check: if the user got at least one answer correct,
+	// ensure the minimum score is in the range of 50 to 70 (inclusive)
+	// to avoid a score of 0.
+	hasCorrect := false
+	for _, h := range sess.History {
+		if h.Correct {
+			hasCorrect = true
+			break
+		}
+	}
+	if hasCorrect && score < 50 {
+		score = rand.Intn(21) + 50
+	}
+
 	level := ThetaToLevel(sess.ThetaCurrent)
 
 	// Convert history to evaluate payload format
@@ -588,23 +604,48 @@ func (s *CATService) GetResult(ctx context.Context, sessionID string) (*SessionR
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
+			// Find the profile first to check if the completed assessment is of type "general"
+			var profile models.UserProfile
+			err := userProfileColl.FindOne(bgCtx, bson.M{"userId": sess.UserID}).Decode(&profile)
+			isGeneral := false
+			if err == nil {
+				// Find the specific assessment and check its type
+				for _, ast := range profile.CVAssessments {
+					if ast.ID == sess.AssessmentID {
+						if ast.Type == "general" {
+							isGeneral = true
+						}
+						break
+					}
+				}
+			} else {
+				log.Printf("[CAT] Failed to find user profile to check assessment type: %v\n", err)
+			}
+
 			filter := bson.M{
 				"userId":           sess.UserID,
 				"cvAssessments.id": sess.AssessmentID,
 			}
+
+			updateFields := bson.M{
+				"cvAssessments.$.status":    "completed",
+				"cvAssessments.$.sessionId": sessionID,
+				"cvAssessments.$.score":     res.Score,
+				"cvAssessments.$.level":     res.Level,
+			}
+
+			if isGeneral {
+				updateFields["roleAssessmentCompleted"] = true
+			}
+
 			update := bson.M{
-				"$set": bson.M{
-					"cvAssessments.$.status":    "completed",
-					"cvAssessments.$.sessionId": sessionID,
-					"cvAssessments.$.score":     res.Score,
-					"cvAssessments.$.level":     res.Level,
-				},
+				"$set": updateFields,
 			}
 			_, updateErr := userProfileColl.UpdateOne(bgCtx, filter, update)
 			if updateErr != nil {
 				log.Printf("[CAT] Failed to update assessment status in UserProfile: %v\n", updateErr)
 			} else {
-				log.Printf("[CAT] Assessment status updated to completed for user %s, assessment %s\n", sess.UserID, sess.AssessmentID)
+				log.Printf("[CAT] Assessment status updated to completed (isGeneral: %v) for user %s, assessment %s\n", isGeneral, sess.UserID, sess.AssessmentID)
 			}
 		}()
 	}

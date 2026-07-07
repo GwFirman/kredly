@@ -91,11 +91,19 @@ function RouteComponent() {
 
   const fetchAssessments = React.useCallback(async () => {
     try {
-      const response = await fetch('/api/profile', {
-        credentials: 'include',
-      });
-      if (response.ok) {
-        const data = await response.json();
+      const [profileRes, certRes] = await Promise.all([
+        fetch('/api/profile', { credentials: 'include' }),
+        fetch('/api/certificates/user', { credentials: 'include' }),
+      ]);
+
+      let userCertificates: any[] = [];
+      if (certRes.ok) {
+        const certData = await certRes.json();
+        userCertificates = certData.certificates || [];
+      }
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
         if (
           data.profile &&
           data.profile.cvAssessments &&
@@ -189,27 +197,46 @@ function RouteComponent() {
           );
 
           setCompletedAssessments(
-            completed.map((a: CVAssessmentFromAPI) => ({
-              id: a.id,
-              skillName: a.title,
-              difficulty: a.difficulty || 'Intermediate',
-              estimatedTime: a.estimatedTime || '45 menit',
-              questionCount: a.questionCount || 30,
-              isRecommended: a.isRecommended,
-              category:
-                a.category || (a.type === 'general' ? 'General' : 'Skill'),
-              status: 'completed',
-              sessionId: a.sessionId,
-              score: a.score,
-              level: a.level,
-            })),
+            completed.map((a: CVAssessmentFromAPI) => {
+              const matchingCerts = userCertificates.filter(
+                (cert: any) => cert.assessmentName === a.title,
+              );
+
+              let bestScore = a.score || 0;
+              let bestLevel = a.level || 'Intermediate';
+
+              if (matchingCerts.length > 0) {
+                const sortedCerts = [...matchingCerts].sort(
+                  (x, y) => (y.score || 0) - (x.score || 0),
+                );
+                bestScore = sortedCerts[0].score || bestScore;
+                bestLevel = sortedCerts[0].level || bestLevel;
+              }
+
+              return {
+                id: a.id,
+                skillName: a.title,
+                difficulty: a.difficulty || 'Intermediate',
+                estimatedTime: a.estimatedTime || '45 menit',
+                questionCount: a.questionCount || 30,
+                isRecommended: a.isRecommended,
+                category:
+                  a.category || (a.type === 'general' ? 'General' : 'Skill'),
+                status: 'completed',
+                sessionId: a.sessionId,
+                score: bestScore,
+                level: bestLevel,
+              };
+            }),
           );
 
           const hasUncompletedGeneral = allAssessments.some(
             (a: CVAssessmentFromAPI) =>
               a.type === 'general' && a.status !== 'completed',
           );
-          setRoleAssessmentCompleted(!hasUncompletedGeneral);
+          setRoleAssessmentCompleted(
+            !!data.profile.roleAssessmentCompleted || !hasUncompletedGeneral,
+          );
 
           setProfileExists(true);
           setIsLoadingProfile(false);

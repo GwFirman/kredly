@@ -22,6 +22,24 @@ interface Credential {
   status: 'verified';
   sessionId?: string;
   level?: string;
+  createdAt?: string;
+}
+
+interface CredentialAttempt {
+  id: string;
+  score: number;
+  dateEarned: string;
+  blockchainTxHash: string;
+  sessionId: string;
+  level: string;
+  createdAt: string;
+}
+
+interface GroupedCredential {
+  skillName: string;
+  bestScore: number;
+  bestLevel: string;
+  attempts: CredentialAttempt[];
 }
 
 function RouteComponent() {
@@ -33,72 +51,127 @@ function RouteComponent() {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch completed assessments on mount
+  // Fetch certificates on mount
   useEffect(() => {
-    async function fetchCompletedAssessments() {
+    async function fetchUserCertificates() {
       try {
-        const response = await fetch('/api/profile', {
+        const response = await fetch('/api/certificates/user', {
           credentials: 'include',
         });
         if (response.ok) {
           const data = await response.json();
-          if (data.profile && data.profile.cvAssessments) {
-            const completed = data.profile.cvAssessments.filter(
-              (a: any) => a.status === 'completed',
-            );
-            const mapped = completed.map((a: any) => {
-              const hash = a.sessionId
-                ? `0x${a.sessionId.replace(/-/g, '').slice(0, 40)}`
-                : '0x0000000000000000000000000000000000000000';
+          if (data.certificates) {
+            const mapped = data.certificates.map((cert: any) => {
+              const dateObj = cert.createdAt ? new Date(cert.createdAt) : null;
+              const dateEarned =
+                dateObj && !isNaN(dateObj.getTime())
+                  ? dateObj.toLocaleDateString('id-ID', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })
+                  : 'Selesai';
+
+              const hash =
+                cert.txHash ||
+                (cert.sessionId
+                  ? `0x${cert.sessionId.replace(/-/g, '').slice(0, 40)}`
+                  : '0x0000000000000000000000000000000000000000');
 
               return {
-                id: a.id,
-                skillName: a.title,
-                score: a.score || 0,
-                dateEarned: 'Selesai',
+                id: cert.id,
+                skillName: cert.assessmentName,
+                score: cert.score || 0,
+                dateEarned: dateEarned,
                 blockchainTxHash: hash,
                 status: 'verified' as const,
-                sessionId: a.sessionId,
-                level: a.level || 'Intermediate',
+                sessionId: cert.sessionId,
+                level: 'Intermediate',
+                createdAt: cert.createdAt || '',
               };
             });
             setCredentials(mapped);
           }
         }
       } catch (err) {
-        console.error('Failed to fetch completed assessments:', err);
+        console.error('Failed to fetch certificates:', err);
       } finally {
         setIsLoading(false);
       }
     }
-    fetchCompletedAssessments();
+    fetchUserCertificates();
   }, []);
 
-  // Filter and sort credentials
-  const filteredCredentials = useMemo(() => {
-    let filtered = [...credentials];
+  // Filter, group, and sort credentials
+  const groupedCredentials: GroupedCredential[] = useMemo(() => {
+    // 1. Group raw credentials by skillName
+    const groups: { [key: string]: CredentialAttempt[] } = {};
 
-    // Search filter
+    credentials.forEach((cert) => {
+      if (!groups[cert.skillName]) {
+        groups[cert.skillName] = [];
+      }
+      groups[cert.skillName].push({
+        id: cert.id,
+        score: cert.score,
+        dateEarned: cert.dateEarned,
+        blockchainTxHash: cert.blockchainTxHash,
+        sessionId: cert.sessionId || cert.id,
+        level: cert.level || 'Intermediate',
+        createdAt: cert.createdAt || '',
+      });
+    });
+
+    // 2. Map groups to GroupedCredential array
+    let grouped = Object.keys(groups).map((skillName) => {
+      const attempts = groups[skillName];
+
+      // Sort to find the highest score (Best Attempt)
+      const sortedByScore = [...attempts].sort((a, b) => b.score - a.score);
+      const bestAttempt = sortedByScore[0];
+
+      // Sort all attempts by date (newest first)
+      const sortedByDate = [...attempts].sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
+      });
+
+      return {
+        skillName,
+        bestScore: bestAttempt.score,
+        bestLevel: bestAttempt.level,
+        attempts: sortedByDate,
+      };
+    });
+
+    // 3. Apply search query filter
     if (searchQuery) {
-      filtered = filtered.filter((cred) =>
-        cred.skillName.toLowerCase().includes(searchQuery.toLowerCase()),
+      grouped = grouped.filter((item) =>
+        item.skillName.toLowerCase().includes(searchQuery.toLowerCase()),
       );
     }
 
-    // Status filter
-    if (filterStatus !== 'all') {
-      filtered = filtered.filter((cred) => cred.status === filterStatus);
-    }
-
-    // Sort
-    filtered.sort((a, b) => {
-      if (sortBy === 'score') return b.score - a.score;
-      if (sortBy === 'skill') return a.skillName.localeCompare(b.skillName);
-      return 0; // date default
+    // 4. Apply sorting to the grouped list
+    grouped.sort((a, b) => {
+      if (sortBy === 'score') {
+        return b.bestScore - a.bestScore;
+      }
+      if (sortBy === 'skill') {
+        return a.skillName.localeCompare(b.skillName);
+      }
+      // Default: sort by the date of the latest attempt
+      const dateA = a.attempts[0]?.createdAt
+        ? new Date(a.attempts[0].createdAt).getTime()
+        : 0;
+      const dateB = b.attempts[0]?.createdAt
+        ? new Date(b.attempts[0].createdAt).getTime()
+        : 0;
+      return dateB - dateA;
     });
 
-    return filtered;
-  }, [credentials, searchQuery, filterStatus, sortBy]);
+    return grouped;
+  }, [credentials, searchQuery, sortBy]);
 
   // Calculate statistics
   const stats = useMemo(() => {
@@ -190,7 +263,7 @@ function RouteComponent() {
 
         {/* Certification Grid/List */}
         <CertificationList
-          filteredCredentials={filteredCredentials}
+          groupedCredentials={groupedCredentials}
           viewMode={viewMode}
           searchQuery={searchQuery}
           filterStatus={filterStatus}

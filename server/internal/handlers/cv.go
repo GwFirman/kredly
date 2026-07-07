@@ -628,4 +628,3 @@ func saveUploadedFile(file *multipart.FileHeader, dst string) error {
 	_, err = io.Copy(out, src)
 	return err
 }
-

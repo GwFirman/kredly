@@ -8,12 +8,23 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 )
 
 type ApifyService struct{}
 
 func NewApifyService() *ApifyService {
 	return &ApifyService{}
+}
+
+type CVData struct {
+	Role       *string
+	Level      *string
+	Skills     []string
+	Experience string
+	IsStudent  bool
+	Degree     *string
+	Summary    *string
 }
 
 type JobResult struct {
@@ -40,6 +51,7 @@ type JobResult struct {
 func (s *ApifyService) SearchAllJobs(
 	query string,
 	location string,
+	cvData *CVData,
 ) ([]JobResult, error) {
 	token := os.Getenv("APIFY_TOKEN")
 	if token == "" {
@@ -55,7 +67,7 @@ func (s *ApifyService) SearchAllJobs(
 
 	scrapers := []struct {
 		name  string
-		fn    func(string, string, string, int) ([]JobResult, error)
+		fn    func(string, string, string, int, *CVData) ([]JobResult, error)
 		index int
 		limit int
 	}{
@@ -65,15 +77,23 @@ func (s *ApifyService) SearchAllJobs(
 		{"upwork", s.searchUpwork, 3, limits[3]},
 	}
 
+	fmt.Printf("\n=== Starting job search ===\n")
+	fmt.Printf("Query: %s, Location: %s\n", query, location)
+	fmt.Printf("Limits: LinkedIn=%d, Indeed=%d, Glassdoor=%d, Upwork=%d\n",
+		limits[0], limits[1], limits[2], limits[3])
+
 	for _, scraper := range scrapers {
 		wg.Add(1)
-		go func(name string, fn func(string, string, string, int) ([]JobResult, error), idx int, limit int) {
+		go func(name string, fn func(string, string, string, int, *CVData) ([]JobResult, error), idx int, limit int) {
 			defer wg.Done()
-			jobs, err := fn(token, query, location, limit)
+			fmt.Printf("[%s] Starting scrape (limit: %d)...\n", name, limit)
+			jobs, err := fn(token, query, location, limit, cvData)
 			if err != nil {
+				fmt.Printf("[%s] ERROR: %v\n", name, err)
 				errors[idx] = err
 				return
 			}
+			fmt.Printf("[%s] SUCCESS: %d jobs fetched\n", name, len(jobs))
 			results[idx] = jobs
 		}(scraper.name, scraper.fn, scraper.index, scraper.limit)
 	}
@@ -81,15 +101,26 @@ func (s *ApifyService) SearchAllJobs(
 	wg.Wait()
 
 	allJobs := []JobResult{}
+	fmt.Printf("\n=== Results Summary ===\n")
 	for i, jobs := range results {
+		scraperName := scrapers[i].name
 		if errors[i] != nil {
+			fmt.Printf("[%s] FAILED: %v\n", scraperName, errors[i])
 			continue
 		}
+		fmt.Printf("[%s] %d jobs\n", scraperName, len(jobs))
 		allJobs = append(allJobs, jobs...)
 	}
+	fmt.Printf("Total jobs: %d\n\n", len(allJobs))
 
 	if len(allJobs) == 0 {
-		return nil, fmt.Errorf("all scrapers failed")
+		errorMessages := ""
+		for i, err := range errors {
+			if err != nil {
+				errorMessages += fmt.Sprintf("%s: %v; ", scrapers[i].name, err)
+			}
+		}
+		return nil, fmt.Errorf("all scrapers failed: %s", errorMessages)
 	}
 
 	return allJobs, nil
@@ -138,22 +169,36 @@ func generateRandomLimits(total int, count int) []int {
 	return limits
 }
 
-// LinkedIn Jobs Scraper - RIGGeqD6RqKmlVoQU
+// LinkedIn Jobs Scraper - hKByXkMQaC5Qt9UMN
 func (s *ApifyService) searchLinkedIn(
 	token string,
 	query string,
 	location string,
 	limit int,
+	cvData *CVData,
 ) ([]JobResult, error) {
 	url := fmt.Sprintf(
-		"https://api.apify.com/v2/acts/RIGGeqD6RqKmlVoQU/run-sync-get-dataset-items?token=%s",
+		"https://api.apify.com/v2/acts/hKByXkMQaC5Qt9UMN/run-sync-get-dataset-items?token=%s",
 		token,
 	)
 
+	linkedinSearchURL := fmt.Sprintf(
+		"https://www.linkedin.com/jobs/search/?keywords=%s&location=%s&position=1&pageNum=0",
+		query,
+		location,
+	)
+
+	// LinkedIn requires minimum count of 10
+	linkedinCount := limit
+	if linkedinCount < 10 {
+		linkedinCount = 10
+	}
+
 	payload := map[string]interface{}{
-		"title":    query,
-		"location": location,
-		"limit":    limit,
+		"urls":            []string{linkedinSearchURL},
+		"scrapeCompany":   true,
+		"count":           linkedinCount,
+		"splitByLocation": false,
 	}
 
 	items, err := s.callApify(url, payload)
@@ -170,40 +215,58 @@ func (s *ApifyService) searchLinkedIn(
 			Location: getStringField(item, "location"),
 		}
 
+		// Skip jobs without required fields
+		if job.Title == "" || job.Company == "" {
+			fmt.Printf("[linkedin] ⚠️  Skipping incomplete job - missing title or company\n")
+			continue
+		}
+
 		if id := getStringField(item, "id"); id != "" {
 			job.ID = &id
 		}
-		if companyURL := getStringField(item, "companyUrl"); companyURL != "" {
+		if companyURL := getStringField(item, "companyLinkedinUrl"); companyURL != "" {
 			job.CompanyURL = &companyURL
 		}
-		if recruiterName := getStringField(item, "recruiterName"); recruiterName != "" {
+		if logo := getStringField(item, "companyLogo"); logo != "" {
+			job.Logo = &logo
+		}
+		if recruiterName := getStringField(item, "jobPosterName"); recruiterName != "" {
 			job.RecruiterName = &recruiterName
 		}
-		if recruiterURL := getStringField(item, "recruiterUrl"); recruiterURL != "" {
+		if recruiterURL := getStringField(item, "jobPosterProfileUrl"); recruiterURL != "" {
 			job.RecruiterURL = &recruiterURL
 		}
-		if experienceLevel := getStringField(item, "experienceLevel"); experienceLevel != "" {
+		if experienceLevel := getStringField(item, "seniorityLevel"); experienceLevel != "" {
 			job.ExperienceLevel = &experienceLevel
 		}
-		if contractType := getStringField(item, "contractType"); contractType != "" {
-			job.JobType = &contractType
+		if jobType := getStringField(item, "employmentType"); jobType != "" {
+			job.JobType = &jobType
 		}
-		if sector := getStringField(item, "sector"); sector != "" {
-			job.Sector = &sector
+		if industries := getStringField(item, "industries"); industries != "" {
+			job.Sector = &industries
 		}
-		if salary := getStringField(item, "salary"); salary != "" {
-			job.Salary = &salary
+		if salaryInfo, ok := item["salaryInfo"].([]interface{}); ok && len(salaryInfo) > 0 {
+			salaryParts := []string{}
+			for _, s := range salaryInfo {
+				if str, ok := s.(string); ok {
+					salaryParts = append(salaryParts, str)
+				}
+			}
+			if len(salaryParts) > 0 {
+				salaryText := salaryParts[0]
+				if len(salaryParts) > 1 {
+					salaryText = fmt.Sprintf("%s - %s", salaryParts[0], salaryParts[1])
+				}
+				job.Salary = &salaryText
+			}
 		}
-		if url := getStringField(item, "url"); url != "" {
-			job.URL = &url
+		if jobURL := getStringField(item, "link"); jobURL != "" {
+			job.URL = &jobURL
 		}
-		if posted := getStringField(item, "postedTimeAgo"); posted != "" {
-			job.Posted = &posted
-		}
-		if postedDate := getStringField(item, "postedDate"); postedDate != "" {
+		if postedDate := getStringField(item, "postedAt"); postedDate != "" {
 			job.PostedDate = &postedDate
 		}
-		if description := getStringField(item, "description"); description != "" {
+		if description := getStringField(item, "descriptionText"); description != "" {
 			job.Description = &description
 		}
 		if descriptionHTML := getStringField(item, "descriptionHtml"); descriptionHTML != "" {
@@ -216,24 +279,33 @@ func (s *ApifyService) searchLinkedIn(
 	return jobs, nil
 }
 
-// Indeed Jobs Scraper - TrtlecxAsNRbKl1na
+// Indeed Jobs Scraper - hMvNSpz3JnHgl5jkh
 func (s *ApifyService) searchIndeed(
 	token string,
 	query string,
 	location string,
 	limit int,
+	cvData *CVData,
 ) ([]JobResult, error) {
 	url := fmt.Sprintf(
-		"https://api.apify.com/v2/acts/TrtlecxAsNRbKl1na/run-sync-get-dataset-items?token=%s",
+		"https://api.apify.com/v2/acts/hMvNSpz3JnHgl5jkh/run-sync-get-dataset-items?token=%s",
 		token,
 	)
 
+	// Extract country from location or default to US
+	country := "US"
+	if location != "" {
+		// Simple heuristic for country extraction
+		// Default to US for now
+		country = "US"
+	}
+
 	payload := map[string]interface{}{
-		"country":    "us",
-		"title":      query,
-		"location":   location,
-		"limit":      limit,
-		"datePosted": "7",
+		"position":            query,
+		"maxItems":            limit,
+		"country":             country,
+		"location":            location,
+		"saveOnlyUniqueItems": true,
 	}
 
 	items, err := s.callApify(url, payload)
@@ -243,22 +315,170 @@ func (s *ApifyService) searchIndeed(
 
 	jobs := []JobResult{}
 	for _, item := range items {
-		// Extract employer info from nested object
-		companyName := getNestedStringField(item, "employer", "name")
+		job := JobResult{
+			Source:   "indeed",
+			Title:    getStringField(item, "positionName"),
+			Company:  getStringField(item, "company"),
+			Location: getStringField(item, "location"),
+		}
 
-		// Extract location from nested object (city, state)
-		city := getNestedStringField(item, "location", "city")
-		state := getNestedStringField(item, "location", "admin1Code")
-		locationStr := city
-		if state != "" {
-			locationStr = fmt.Sprintf("%s, %s", city, state)
+		fmt.Printf("[Indeed] Parsing job - Title: %s, Company: %s, Location: %s\n",
+			job.Title, job.Company, job.Location)
+
+		// Skip jobs without required fields
+		if job.Title == "" || job.Company == "" {
+			fmt.Printf("[Indeed] ⚠️  Skipping incomplete job - missing title or company\n")
+			continue
+		}
+
+		// Extract ID
+		if id := getStringField(item, "id"); id != "" {
+			job.ID = &id
+			fmt.Printf("[Indeed] - ID: %s\n", id)
+		}
+
+		// Extract logo
+		if logo := getStringField(item, "companyLogo"); logo != "" {
+			job.Logo = &logo
+			fmt.Printf("[Indeed] - Logo: %s\n", logo)
+		}
+
+		// Extract salary
+		if salary := getStringField(item, "salary"); salary != "" {
+			job.Salary = &salary
+			fmt.Printf("[Indeed] - Salary: %s\n", salary)
+		}
+
+		// Extract job type from jobType array
+		if jobTypes, ok := item["jobType"].([]interface{}); ok && len(jobTypes) > 0 {
+			if jobTypeStr, ok := jobTypes[0].(string); ok {
+				job.JobType = &jobTypeStr
+				fmt.Printf("[Indeed] - JobType: %s\n", jobTypeStr)
+			}
+		}
+
+		// Extract URL
+		if jobUrl := getStringField(item, "url"); jobUrl != "" {
+			job.URL = &jobUrl
+			fmt.Printf("[Indeed] - URL: %s\n", jobUrl)
+		}
+
+		// Extract description
+		if description := getStringField(item, "description"); description != "" {
+			job.Description = &description
+			fmt.Printf("[Indeed] - Description length: %d chars\n", len(description))
+		}
+		if descriptionHTML := getStringField(item, "descriptionHTML"); descriptionHTML != "" {
+			job.DescriptionHTML = &descriptionHTML
+			fmt.Printf("[Indeed] - DescriptionHTML length: %d chars\n", len(descriptionHTML))
+		}
+
+		// Extract posted date
+		if postedAt := getStringField(item, "postedAt"); postedAt != "" {
+			job.Posted = &postedAt
+			fmt.Printf("[Indeed] - PostedAt: %s\n", postedAt)
+		}
+
+		// Extract scraped date as fallback for posted date
+		if scrapedAt := getStringField(item, "scrapedAt"); scrapedAt != "" && job.PostedDate == nil {
+			job.PostedDate = &scrapedAt
+			fmt.Printf("[Indeed] - ScrapedAt: %s\n", scrapedAt)
+		}
+
+		jobs = append(jobs, job)
+	}
+
+	return jobs, nil
+}
+
+// Glassdoor Jobs Scraper - bYSAbQqxwImLaf2nb
+func (s *ApifyService) searchGlassdoor(
+	token string,
+	query string,
+	location string,
+	limit int,
+	cvData *CVData,
+) ([]JobResult, error) {
+	url := fmt.Sprintf(
+		"https://api.apify.com/v2/acts/bYSAbQqxwImLaf2nb/run-sync-get-dataset-items?token=%s",
+		token,
+	)
+
+	// Build keywords array from query
+	keywords := []string{query}
+
+	// Build resume keywords from CV skills for better matching
+	resumeKeywords := []map[string]interface{}{}
+	if cvData != nil && len(cvData.Skills) > 0 {
+		for _, skill := range cvData.Skills {
+			resumeKeywords = append(resumeKeywords, map[string]interface{}{
+				"keyword": skill,
+			})
+		}
+	}
+
+	// Extract country from location or default to United States
+	country := "United States"
+	if location != "" {
+		// Simple heuristic: if location contains common country patterns
+		// For now, default to United States
+		country = "United States"
+	}
+
+	payload := map[string]interface{}{
+		"keywords":             keywords,
+		"country":              country,
+		"location":             location,
+		"datePosted":           "14", // Last 14 days
+		"saveOnlyUniqueItems":  true,
+		"deepSearch":           true,
+		"includeNoSalaryJob":   true,
+		"maxItems":             limit,
+		"resumeKeywords":       resumeKeywords,
+	}
+
+	items, err := s.callApify(url, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := []JobResult{}
+	for _, item := range items {
+		// Extract company info from nested company object
+		companyName := ""
+		var companyURL *string
+		var logo *string
+		if company, ok := item["company"].(map[string]interface{}); ok {
+			companyName = getStringFieldFromMap(company, "companyName")
+			if pageUrl := getStringFieldFromMap(company, "companyPageUrl"); pageUrl != "" {
+				companyURL = &pageUrl
+			}
+			if logoUrl := getStringFieldFromMap(company, "logoImgUrl"); logoUrl != "" {
+				logo = &logoUrl
+			}
+		}
+
+		// Extract location from separate fields
+		locationCity := getStringField(item, "location_city")
+		locationState := getStringField(item, "location_state")
+		locationStr := locationCity
+		if locationState != "" {
+			locationStr = fmt.Sprintf("%s, %s", locationCity, locationState)
 		}
 
 		job := JobResult{
-			Source:   "indeed",
-			Title:    getStringField(item, "title"),
-			Company:  companyName,
-			Location: locationStr,
+			Source:    "glassdoor",
+			Title:     getStringField(item, "title"),
+			Company:   companyName,
+			Location:  locationStr,
+			CompanyURL: companyURL,
+			Logo:      logo,
+		}
+
+		// Skip jobs without required fields
+		if job.Title == "" || job.Company == "" {
+			fmt.Printf("[glassdoor] ⚠️  Skipping incomplete job - missing title or company\n")
+			continue
 		}
 
 		// Extract ID from key field
@@ -266,58 +486,30 @@ func (s *ApifyService) searchIndeed(
 			job.ID = &key
 		}
 
-		// Extract logo from employer object
-		if logo := getNestedStringField(item, "employer", "logoUrl"); logo != "" {
-			job.Logo = &logo
-		}
-
-		// Extract salary from baseSalary object
-		if baseSalary, ok := item["baseSalary"].(map[string]interface{}); ok {
-			if min, okMin := baseSalary["min"].(float64); okMin {
-				if max, okMax := baseSalary["max"].(float64); okMax {
-					currency := getStringFieldFromMap(baseSalary, "currencyCode")
-					unit := getStringFieldFromMap(baseSalary, "unitOfWork")
-					if currency == "" {
-						currency = "USD"
-					}
-					salaryText := fmt.Sprintf("%s %.0f - %.0f / %s", currency, min, max, unit)
-					job.Salary = &salaryText
-				}
+		// Extract experience level from experienceRequired array
+		if expRequired, ok := item["experienceRequired"].([]interface{}); ok && len(expRequired) > 0 {
+			if expStr, ok := expRequired[0].(string); ok {
+				experienceLevel := fmt.Sprintf("%s+ years", expStr)
+				job.ExperienceLevel = &experienceLevel
 			}
 		}
 
-		// Extract URLs (prefer url over jobUrl)
-		if url := getStringFieldVariants(item, "url", "jobUrl"); url != "" {
-			job.URL = &url
-		}
-
-		// Extract description
-		if desc, ok := item["description"].(map[string]interface{}); ok {
-			if text := getStringFieldFromMap(desc, "text"); text != "" {
-				job.Description = &text
+		// Extract job type from jobTypes array
+		if jobTypes, ok := item["jobTypes"].([]interface{}); ok && len(jobTypes) > 0 {
+			if jobTypeStr, ok := jobTypes[0].(string); ok {
+				job.JobType = &jobTypeStr
 			}
 		}
 
-		// Extract job type from jobTypes object (take first one)
-		if jobTypes, ok := item["jobTypes"].(map[string]interface{}); ok {
-			for _, jobType := range jobTypes {
-				if jobTypeStr, ok := jobType.(string); ok {
-					job.JobType = &jobTypeStr
-					break
-				}
-			}
-		}
-
-		// Extract skills/experience from attributes (take up to 3 relevant ones)
-		if attributes, ok := item["attributes"].(map[string]interface{}); ok {
+		// Extract sector from jobCategory or attributes
+		if category := getStringField(item, "jobCategory"); category != "" {
+			job.Sector = &category
+		} else if attributes, ok := item["attributes"].([]interface{}); ok && len(attributes) > 0 {
+			// Join first 3 attributes as sector
 			skills := []string{}
-			// Look for technical skills and qualifications
-			for _, attrValue := range attributes {
-				if attrStr, ok := attrValue.(string); ok {
-					// Filter for skills/qualifications, skip generic ones
-					if attrStr != "" && len(skills) < 3 {
-						skills = append(skills, attrStr)
-					}
+			for i := 0; i < len(attributes) && i < 3; i++ {
+				if attr, ok := attributes[i].(string); ok {
+					skills = append(skills, attr)
 				}
 			}
 			if len(skills) > 0 {
@@ -329,104 +521,42 @@ func (s *ApifyService) searchIndeed(
 			}
 		}
 
-		// Extract posted date
-		if datePublished := getStringField(item, "datePublished"); datePublished != "" {
-			job.PostedDate = &datePublished
-		} else if dateOnIndeed := getStringField(item, "dateOnIndeed"); dateOnIndeed != "" {
-			job.PostedDate = &dateOnIndeed
-		}
-
-		jobs = append(jobs, job)
-	}
-
-	return jobs, nil
-}
-
-// Glassdoor Jobs Scraper - 5OaooRg0FxlRF0L1B
-func (s *ApifyService) searchGlassdoor(
-	token string,
-	query string,
-	location string,
-	limit int,
-) ([]JobResult, error) {
-	url := fmt.Sprintf(
-		"https://api.apify.com/v2/acts/5OaooRg0FxlRF0L1B/run-sync-get-dataset-items?token=%s",
-		token,
-	)
-
-	payload := map[string]interface{}{
-		"keywords": query,
-		"location": location,
-		"daysOld":  30,
-		"limit":    limit,
-	}
-
-	items, err := s.callApify(url, payload)
-	if err != nil {
-		return nil, err
-	}
-
-	jobs := []JobResult{}
-	for _, item := range items {
-		// Glassdoor returns nested objects for employer and location
-		companyName := getNestedStringField(item, "employer", "name")
-		locationName := getNestedStringField(item, "location", "name")
-
-		job := JobResult{
-			Source:   "glassdoor",
-			Title:    getStringField(item, "title"),
-			Company:  companyName,
-			Location: locationName,
-		}
-
-		// Extract ID
-		if id, ok := item["id"].(float64); ok {
-			idStr := fmt.Sprintf("%.0f", id)
-			job.ID = &idStr
-		}
-
-		// Extract company URL from employer object
-		if companyURL := getNestedStringField(item, "employer", "url"); companyURL != "" {
-			job.CompanyURL = &companyURL
-		}
-
-		// Extract logo from employer object
-		if logo := getNestedStringField(item, "employer", "logoUrl"); logo != "" {
-			job.Logo = &logo
-		}
-
-		// Extract salary from pay object (min-max format)
-		if pay, ok := item["pay"].(map[string]interface{}); ok {
-			if min, okMin := pay["min"].(float64); okMin {
-				if max, okMax := pay["max"].(float64); okMax {
-					currency := getStringFieldFromMap(pay, "currency")
-					period := getStringFieldFromMap(pay, "period")
-					salaryText := fmt.Sprintf("%s %.0f - %.0f (%s)", currency, min, max, period)
-					job.Salary = &salaryText
+		// Extract salary from baseSalary fields
+		if minSalary, okMin := item["baseSalary_min"].(float64); okMin {
+			if maxSalary, okMax := item["baseSalary_max"].(float64); okMax {
+				currency := getStringField(item, "salary_currency")
+				if currency == "" {
+					currency = "USD"
 				}
+				period := getStringField(item, "salary_period")
+				salaryText := fmt.Sprintf("%s %.0f - %.0f (%s)", currency, minSalary, maxSalary, period)
+				job.Salary = &salaryText
 			}
 		}
 
-		// Extract URLs
-		if url := getStringFieldVariants(item, "seoUrl", "url", "jobUrl"); url != "" {
-			job.URL = &url
+		// Extract URL from jobUrl
+		if jobUrl := getStringField(item, "jobUrl"); jobUrl != "" {
+			job.URL = &jobUrl
 		}
 
-		// Extract description (HTML format)
-		if description := getStringField(item, "description"); description != "" {
+		// Extract description from description_text
+		if description := getStringField(item, "description_text"); description != "" {
 			job.Description = &description
-			job.DescriptionHTML = &description
+		}
+		if descriptionHTML := getStringField(item, "description_html"); descriptionHTML != "" {
+			job.DescriptionHTML = &descriptionHTML
 		}
 
-		// ageInDays is a number, convert to relative time string and absolute date
+		// Extract posted date from datePublished
+		if datePublished := getStringField(item, "datePublished"); datePublished != "" {
+			job.PostedDate = &datePublished
+		}
+
+		// Calculate relative posted time from ageInDays
 		if ageInDays, ok := item["ageInDays"].(float64); ok {
 			days := int(ageInDays)
 			posted := fmt.Sprintf("%d days ago", days)
 			job.Posted = &posted
-
-			// Calculate absolute date by subtracting days from current time
-			// This is an approximation since we don't know the exact timestamp
-			// But it's good enough for display purposes
 		}
 
 		jobs = append(jobs, job)
@@ -435,22 +565,90 @@ func (s *ApifyService) searchGlassdoor(
 	return jobs, nil
 }
 
-// Upwork Jobs Scraper - zxl6JzwzACkNsR5PQ
+// Upwork Jobs Scraper - YdYsB7rsRY0EUb1lP
 func (s *ApifyService) searchUpwork(
 	token string,
 	query string,
 	location string,
 	limit int,
+	cvData *CVData,
 ) ([]JobResult, error) {
 	url := fmt.Sprintf(
-		"https://api.apify.com/v2/acts/zxl6JzwzACkNsR5PQ/run-sync-get-dataset-items?token=%s",
+		"https://api.apify.com/v2/acts/YdYsB7rsRY0EUb1lP/run-sync-get-dataset-items?token=%s",
 		token,
 	)
 
+	// Build date range for recent jobs (last 14 days)
+	now := time.Now()
+	fromDate := now.AddDate(0, 0, -14).Format("2006-01-02")
+	toDate := now.Format("2006-01-02")
+
+	// Build job categories from CV role
+	jobCategories := []string{"Web Development"}
+	if cvData != nil && cvData.Role != nil && *cvData.Role != "" {
+		jobCategories = mapRoleToCategories(*cvData.Role)
+	}
+
+	// Build keywords from CV skills and query
+	keywords := []string{}
+	if cvData != nil && len(cvData.Skills) > 0 {
+		keywords = append(keywords, cvData.Skills...)
+	}
+
+	// Map CV level to budget rates
+	minHourlyRate := "20"
+	maxHourlyRate := "100"
+	if cvData != nil && cvData.Level != nil {
+		_, minHourlyRate, maxHourlyRate = mapLevelToUpworkParams(*cvData.Level)
+	}
+
 	payload := map[string]interface{}{
-		"keywords": query,
-		"sort":     "relevance",
 		"limit":    limit,
+		"fromDate": fromDate,
+		"toDate":   toDate,
+		"jobCategories": jobCategories,
+		"includeKeywords.keywords":       keywords,
+		"includeKeywords.matchTitle":      true,
+		"includeKeywords.matchDescription": true,
+		"includeKeywords.matchSkills":     true,
+		"excludeKeywords.keywords":        []string{},
+		"excludeKeywords.matchTitle":      true,
+		"excludeKeywords.matchDescription": true,
+		"excludeKeywords.matchSkills":     true,
+		"budget.allowUnspecifiedBudget":   false,
+		"budget.hourlyRate.min":           minHourlyRate,
+		"budget.hourlyRate.max":           maxHourlyRate,
+		"budget.avgHourlyRate.min":        minHourlyRate,
+		"budget.avgHourlyRate.max":        maxHourlyRate,
+		"budget.fixedPrice.min":           "100",
+		"budget.fixedPrice.max":           "50000",
+		"budget.connectsPrice.min":        1,
+		"budget.connectsPrice.max":        16,
+		"budget.jobDurations": []string{
+			"UNSPECIFIED", "UP_TO_ONE_MONTH", "UP_TO_THREE_MONTHS",
+			"UP_TO_SIX_MONTHS", "MORE_THAN_SIX_MONTHS",
+		},
+		"budget.hourlyWorkloads": []string{
+			"UNSPECIFIED", "LESS_THAN_30_HOURS", "MORE_THAN_30_HOURS",
+		},
+		"budget.noAvgHourlyRatePaid":   false,
+		"budget.noHireRate":             false,
+		"budget.onlyContractToHire":     false,
+		"budget.minClientHireRate":      0,
+		"client.companySizeRange": []string{
+			"UNSPECIFIED", "SOLO_ENTERPRENEUR", "UP_TO_10_EMPLOYEES",
+			"UP_TO_100_EMPOLOYEES", "UP_TO_500_EMPLOYEES",
+			"UP_TO_1K_EMPLOYEES", "MORE_THAN_1K_EMPLOYEES",
+		},
+		"client.descriptionLanguage.exclude": []string{},
+		"client.descriptionLanguage.include": []string{},
+		"client.hireHistory":                 []string{"NONE", "UP_TO", "MORE_THAN"},
+		"jobIds":                             []string{},
+		"addons.enableClientDetails":         false,
+		"addons.enableClientActivity":        false,
+		"addons.enableJobAttachments":        false,
+		"notifications.shouldSendRunMetadata": true,
+		"notifications.limit":                 3,
 	}
 
 	items, err := s.callApify(url, payload)
@@ -460,11 +658,11 @@ func (s *ApifyService) searchUpwork(
 
 	jobs := []JobResult{}
 	for _, item := range items {
-		// Extract client info from nested object
+		// Extract client country
 		clientCountry := "Upwork Client"
 		if client, ok := item["client"].(map[string]interface{}); ok {
-			if country := getStringFieldFromMap(client, "country"); country != "" {
-				clientCountry = fmt.Sprintf("Client from %s", country)
+			if countryCode := getStringFieldFromMap(client, "countryCode"); countryCode != "" {
+				clientCountry = fmt.Sprintf("Client from %s", countryCode)
 			}
 		}
 
@@ -472,86 +670,52 @@ func (s *ApifyService) searchUpwork(
 			Source:   "upwork",
 			Title:    getStringField(item, "title"),
 			Company:  clientCountry,
-			Location: "Remote", // Upwork is typically remote
+			Location: "Remote",
 		}
 
-		// Extract ID
-		if id := getStringField(item, "id"); id != "" {
-			job.ID = &id
+		// Skip jobs without required fields
+		if job.Title == "" || job.Company == "" {
+			fmt.Printf("[upwork] ⚠️  Skipping incomplete job - missing title or company\n")
+			continue
 		}
 
-		// Extract experience level from contractorTier
-		if contractorTier := getStringField(item, "contractorTier"); contractorTier != "" {
-			// Map Upwork contractor tiers to readable experience levels
-			experienceMap := map[string]string{
-				"EntryLevel":        "Entry Level",
-				"IntermediateLevel": "Intermediate",
-				"ExpertLevel":       "Expert",
+		// Extract ID from uid
+		if uid := getStringField(item, "uid"); uid != "" {
+			job.ID = &uid
+		}
+
+		// Extract experience level from vendor.experienceLevel
+		if vendor, ok := item["vendor"].(map[string]interface{}); ok {
+			if expLevel := getStringFieldFromMap(vendor, "experienceLevel"); expLevel != "" {
+				readableLevel := mapUpworkExperienceToReadable(expLevel)
+				job.ExperienceLevel = &readableLevel
 			}
-			if mappedExp, ok := experienceMap[contractorTier]; ok {
-				job.ExperienceLevel = &mappedExp
-			} else {
-				job.ExperienceLevel = &contractorTier
-			}
 		}
 
-		// Extract job type (HOURLY or FIXED)
-		if jobType := getStringField(item, "jobType"); jobType != "" {
-			job.JobType = &jobType
+		// Extract category as sector
+		if category := getStringField(item, "category"); category != "" {
+			job.Sector = &category
 		}
 
-		// Extract skills and join them as sector
-		if skills, ok := item["skills"].([]interface{}); ok {
-			skillNames := []string{}
-			for _, skill := range skills {
-				if skillMap, ok := skill.(map[string]interface{}); ok {
-					if skillName := getStringFieldFromMap(skillMap, "prefLabel"); skillName != "" {
-						skillNames = append(skillNames, skillName)
+		// Extract budget
+		if budget, ok := item["budget"].(map[string]interface{}); ok {
+			var salaryText string
+			if hourlyRate, ok := budget["hourlyRate"].(map[string]interface{}); ok {
+				if min, okMin := hourlyRate["min"].(float64); okMin {
+					if max, okMax := hourlyRate["max"].(float64); okMax {
+						salaryText = fmt.Sprintf("$%.0f - $%.0f/hr", min, max)
+						job.Salary = &salaryText
 					}
 				}
-			}
-			if len(skillNames) > 0 {
-				// Join first 3 skills as sector
-				if len(skillNames) > 3 {
-					skillNames = skillNames[:3]
-				}
-				sector := fmt.Sprintf("%s", skillNames[0])
-				for i := 1; i < len(skillNames); i++ {
-					sector += fmt.Sprintf(", %s", skillNames[i])
-				}
-				job.Sector = &sector
-			}
-		}
-
-		// Extract budget from fixedPriceAmount or hourly rates
-		var salaryText string
-		if fixedPrice, ok := item["fixedPriceAmount"].(map[string]interface{}); ok {
-			if amount, ok := fixedPrice["amount"].(string); ok {
-				currency := getStringFieldFromMap(fixedPrice, "isoCurrencyCode")
-				if currency == "" {
-					currency = "USD"
-				}
-
-				// Add duration if available
-				durationText := ""
-				if duration, ok := item["fixedPriceEngagementDuration"].(map[string]interface{}); ok {
-					if label := getStringFieldFromMap(duration, "label"); label != "" {
-						durationText = fmt.Sprintf(" for %s", label)
-					}
-				}
-
-				salaryText = fmt.Sprintf("%s %s%s", currency, amount, durationText)
-				job.Salary = &salaryText
-			}
-		} else if hourlyMax, ok := item["hourlyBudgetMax"].(float64); ok {
-			if hourlyMin, ok := item["hourlyBudgetMin"].(float64); ok {
-				salaryText = fmt.Sprintf("$%.0f - $%.0f/hr", hourlyMin, hourlyMax)
+			} else if fixedBudget, ok := budget["fixedBudget"].(float64); ok {
+				salaryText = fmt.Sprintf("$%.0f (Fixed)", fixedBudget)
 				job.Salary = &salaryText
 			}
 		}
 
-		if url := getStringField(item, "url"); url != "" {
-			job.URL = &url
+		// Extract URL from externalLink
+		if externalLink := getStringField(item, "externalLink"); externalLink != "" {
+			job.URL = &externalLink
 		}
 
 		// Extract description
@@ -559,17 +723,100 @@ func (s *ApifyService) searchUpwork(
 			job.Description = &description
 		}
 
-		// Extract posted time - prefer publishTime over createTime
-		if publishTime := getStringField(item, "publishTime"); publishTime != "" {
-			job.PostedDate = &publishTime
-		} else if createTime := getStringField(item, "createTime"); createTime != "" {
-			job.PostedDate = &createTime
+		// Extract posted date from createdAt
+		if createdAt := getStringField(item, "createdAt"); createdAt != "" {
+			job.PostedDate = &createdAt
 		}
 
 		jobs = append(jobs, job)
 	}
 
 	return jobs, nil
+}
+
+// mapRoleToCategories maps CV role to Upwork job categories
+func mapRoleToCategories(role string) []string {
+	roleMap := map[string][]string{
+		"web developer":      {"Web Development"},
+		"frontend developer": {"Web Development"},
+		"backend developer":  {"Web Development"},
+		"full stack":         {"Web Development"},
+		"mobile developer":   {"Mobile Development"},
+		"ios developer":      {"Mobile Development"},
+		"android developer":  {"Mobile Development"},
+		"designer":           {"All - Design & Creative"},
+		"ui designer":        {"All - Design & Creative"},
+		"ux designer":        {"All - Design & Creative"},
+		"data scientist":     {"Data Science & Analytics"},
+		"data analyst":       {"Data Science & Analytics"},
+	}
+
+	// Normalize role to lowercase for matching
+	normalizedRole := ""
+	for key := range roleMap {
+		if len(role) > 0 && len(key) > 0 {
+			if role == key || fmt.Sprintf("%s", role) == key {
+				normalizedRole = key
+				break
+			}
+		}
+	}
+
+	if categories, ok := roleMap[normalizedRole]; ok {
+		return categories
+	}
+
+	// Default to Web Development
+	return []string{"Web Development"}
+}
+
+// mapLevelToUpworkParams maps CV level to Upwork experience level and budget range
+func mapLevelToUpworkParams(level string) (string, string, string) {
+	levelMap := map[string]struct {
+		experience string
+		minRate    string
+		maxRate    string
+	}{
+		"entry":        {"ENTRY_LEVEL", "10", "40"},
+		"junior":       {"ENTRY_LEVEL", "10", "40"},
+		"mid":          {"INTERMEDIATE", "30", "80"},
+		"intermediate": {"INTERMEDIATE", "30", "80"},
+		"senior":       {"EXPERT", "60", "150"},
+		"expert":       {"EXPERT", "60", "150"},
+		"lead":         {"EXPERT", "80", "200"},
+	}
+
+	// Normalize level to lowercase for matching
+	normalizedLevel := ""
+	for key := range levelMap {
+		if len(level) > 0 && len(key) > 0 {
+			if level == key || fmt.Sprintf("%s", level) == key {
+				normalizedLevel = key
+				break
+			}
+		}
+	}
+
+	if params, ok := levelMap[normalizedLevel]; ok {
+		return params.experience, params.minRate, params.maxRate
+	}
+
+	// Default to intermediate
+	return "INTERMEDIATE", "30", "80"
+}
+
+// mapUpworkExperienceToReadable maps Upwork experience levels to readable format
+func mapUpworkExperienceToReadable(upworkLevel string) string {
+	levelMap := map[string]string{
+		"ENTRY_LEVEL":  "Entry Level",
+		"INTERMEDIATE": "Intermediate",
+		"EXPERT":       "Expert",
+	}
+
+	if readable, ok := levelMap[upworkLevel]; ok {
+		return readable
+	}
+	return upworkLevel
 }
 
 func (s *ApifyService) callApify(
@@ -578,8 +825,13 @@ func (s *ApifyService) callApify(
 ) ([]map[string]interface{}, error) {
 	bodyBytes, _ := json.Marshal(payload)
 
+	fmt.Printf("\n--- Apify API Call ---\n")
+	fmt.Printf("URL: %s\n", url)
+	fmt.Printf("Payload: %s\n", string(bodyBytes))
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
+		fmt.Printf("ERROR creating request: %v\n", err)
 		return nil, err
 	}
 
@@ -588,23 +840,41 @@ func (s *ApifyService) callApify(
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Printf("ERROR making request: %v\n", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("HTTP Status: %d\n", resp.StatusCode)
+
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		return nil, fmt.Errorf("apify returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("ERROR Response Body: %s\n", string(body))
+		return nil, fmt.Errorf("apify returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("Response size: %d bytes\n", len(body))
 
 	var items []map[string]interface{}
 	err = json.Unmarshal(body, &items)
 	if err != nil {
+		fmt.Printf("ERROR parsing JSON: %v\n", err)
+		fmt.Printf("Response body (first 500 chars): %s\n", string(body[:min(500, len(body))]))
 		return nil, err
 	}
 
+	fmt.Printf("Items returned: %d\n", len(items))
+	fmt.Printf("--- End API Call ---\n\n")
+
 	return items, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func getStringField(data map[string]interface{}, key string) string {

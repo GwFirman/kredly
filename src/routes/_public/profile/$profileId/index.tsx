@@ -1,5 +1,5 @@
 import { createFileRoute, useParams } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -83,6 +83,48 @@ function RouteComponent() {
     fetchProfile();
   }, [profileId]);
 
+  // Group and keep only the best score certificate per skill/title
+  const uniqueCertificates = useMemo(() => {
+    if (!profile || !profile.certificates) return [];
+    const bestCerts: { [title: string]: typeof profile.certificates[0] } = {};
+    
+    for (const cert of profile.certificates) {
+      const existing = bestCerts[cert.title];
+      if (!existing || (cert.score || 0) > (existing.score || 0)) {
+        bestCerts[cert.title] = cert;
+      } else if (cert.score === existing.score) {
+        if (new Date(cert.issuedAt).getTime() > new Date(existing.issuedAt).getTime()) {
+          bestCerts[cert.title] = cert;
+        }
+      }
+    }
+    
+    return Object.values(bestCerts).sort(
+      (a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime()
+    );
+  }, [profile?.certificates]);
+
+  // Group and keep only the best score assessment per title
+  const uniqueAssessments = useMemo(() => {
+    if (!profile || !profile.assessments) return [];
+    const bestAssessments: { [title: string]: typeof profile.assessments[0] } = {};
+    
+    for (const assess of profile.assessments) {
+      const existing = bestAssessments[assess.title];
+      if (!existing || (assess.score || 0) > (existing.score || 0)) {
+        bestAssessments[assess.title] = assess;
+      } else if (assess.score === existing.score) {
+        if (new Date(assess.completedAt).getTime() > new Date(existing.completedAt).getTime()) {
+          bestAssessments[assess.title] = assess;
+        }
+      }
+    }
+    
+    return Object.values(bestAssessments).sort(
+      (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
+    );
+  }, [profile?.assessments]);
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -125,10 +167,6 @@ function RouteComponent() {
       </>
     );
   }
-
-  const certificateCount = profile.certificates?.length || 0;
-  const assessmentCount = profile.assessments?.length || 0;
-  const skillCount = profile.cvSkills?.length || 0;
 
   return (
     <>
@@ -233,8 +271,7 @@ function RouteComponent() {
               <Separator />
 
               {/* Assessments */}
-              {profile.assessments &&
-                profile.assessments.length > 0 &&
+              {uniqueAssessments.length > 0 &&
                 profile.displaySettings?.showAssessments && (
                   <>
                     <div className="p-5">
@@ -245,7 +282,7 @@ function RouteComponent() {
                         </h3>
                       </div>
                       <div className="space-y-2">
-                        {profile.assessments.map((assessment: any) => (
+                        {uniqueAssessments.map((assessment: any) => (
                           <div
                             key={assessment.id}
                             className="flex items-center justify-between p-3 border rounded-lg hover:border-primary/50 transition-colors"
@@ -352,8 +389,7 @@ function RouteComponent() {
                 )}
 
               {/* Certificates */}
-              {profile.certificates &&
-                profile.certificates.length > 0 &&
+              {uniqueCertificates.length > 0 &&
                 profile.displaySettings?.showCertificates && (
                   <div className="p-5">
                     <div className="flex items-center justify-between mb-4">
@@ -363,19 +399,19 @@ function RouteComponent() {
                           Sertifikat Terverifikasi
                         </h3>
                       </div>
-                      {profile.certificates.length > certificatesPerPage && (
+                      {uniqueCertificates.length > certificatesPerPage && (
                         <span className="text-xs text-muted-foreground">
                           Menampilkan{' '}
                           {Math.min(
                             certificatesPage * certificatesPerPage,
-                            profile.certificates.length,
+                            uniqueCertificates.length,
                           )}{' '}
-                          dari {profile.certificates.length}
+                          dari {uniqueCertificates.length}
                         </span>
                       )}
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {profile.certificates
+                      {uniqueCertificates
                         .slice(0, certificatesPage * certificatesPerPage)
                         .map((cert) => (
                           <PublicCertificateCard
@@ -385,7 +421,7 @@ function RouteComponent() {
                           />
                         ))}
                     </div>
-                    {profile.certificates.length >
+                    {uniqueCertificates.length >
                       certificatesPage * certificatesPerPage && (
                       <div className="mt-4 text-center">
                         <Button
@@ -395,7 +431,7 @@ function RouteComponent() {
                           }
                         >
                           Lihat Lebih Banyak (
-                          {profile.certificates.length -
+                          {uniqueCertificates.length -
                             certificatesPage * certificatesPerPage}{' '}
                           lagi)
                         </Button>
